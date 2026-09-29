@@ -508,7 +508,7 @@ public class NetworkGameManager : NetworkBehaviour
 
     public bool CanCallDiscussion => IsFreeRoamPhase(CurrentPhase);
 
-    private static bool IsFreeRoamPhase(GamePhase phase)
+    public static bool IsFreeRoamPhase(GamePhase phase)
     {
         return phase == GamePhase.Day || phase == GamePhase.Sunset || phase == GamePhase.Night;
     }

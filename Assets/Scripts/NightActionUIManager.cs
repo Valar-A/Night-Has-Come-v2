@@ -5,8 +5,8 @@ using UnityEngine;
 using UnityEngine.UI;
 
 // Attach this to a "NightActionPanel" GameObject (child of Canvas). GameplayUIManager
-// is the one turning this panel on/off (only for the local Mafia player, only during
-// Night, only while alive) — this script just drives the single Kill button while
+// is the one turning this panel on/off (for living Mafia during free-roam) —
+// this script drives the Kill button and replicated cooldown while
 // the panel is active.
 //
 // Among Us style: no target-select list. The Mafia has to physically walk up next
@@ -19,7 +19,7 @@ using UnityEngine.UI;
 //     the view (e.g. bottom-center), NOT behind a full-screen dimming panel — the
 //     player still needs to see/move around the world to close the distance.
 //   - statusText: TMP_Text for feedback ("No one nearby", "Press Kill to eliminate
-//     P2", "Target eliminated — waiting for dawn...").
+//     P2", "Kill ready in 30s").
 //   - killRange: how close (in world units) the Mafia needs to be to a target
 //     before Kill lights up. Tune against your player capsule size / room scale.
 public class NightActionUIManager : MonoBehaviour
@@ -28,32 +28,29 @@ public class NightActionUIManager : MonoBehaviour
     [SerializeField] private TMP_Text statusText;
     [SerializeField] private float killRange = 3f;
 
-    private bool _hasSubmitted;
+    private float _requestPendingUntil;
+    private TMP_Text _buttonLabel;
     private PlayerRef? _nearbyTarget;
     private int _nearbyTargetLabelIndex;
 
-    // Fires every time the panel is enabled by GameplayUIManager — i.e. every time
-    // a new Night phase starts — so the once-per-night submit lock resets each round.
+    // Rebinding the panel never resets the server's cooldown.
     private void OnEnable()
     {
-        _hasSubmitted = false;
+        _requestPendingUntil = 0f;
         _nearbyTarget = null;
 
-        killButton.onClick.RemoveAllListeners();
-        killButton.onClick.AddListener(SubmitKill);
+        if (killButton != null)
+        {
+            killButton.onClick.RemoveListener(SubmitKill);
+            killButton.onClick.AddListener(SubmitKill);
+            _buttonLabel = killButton.GetComponentInChildren<TMP_Text>(true);
+        }
 
         UpdateKillButtonState();
     }
 
     private void Update()
     {
-        if (_hasSubmitted)
-        {
-            // Already locked in a kill this Night — stop scanning, just show the
-            // "waiting" state until NetworkGameManager takes the panel away at Dawn.
-            return;
-        }
-
         FindNearbyTarget();
         UpdateKillButtonState();
     }
@@ -75,7 +72,8 @@ public class NightActionUIManager : MonoBehaviour
         if (localObj == null) return;
 
         Vector3 myPos = localObj.transform.position;
-        float closestSqrDist = killRange * killRange;
+        float range = Mathf.Min(killRange, PlayerState.KillRange);
+        float closestSqrDist = range * range;
         PlayerRef? closest = null;
         int closestLabelIndex = 0;
         int index = 1;
@@ -105,26 +103,42 @@ public class NightActionUIManager : MonoBehaviour
 
     private void SubmitKill()
     {
-        if (!_nearbyTarget.HasValue || _hasSubmitted || NightActionManager.Instance == null) return;
+        if (!_nearbyTarget.HasValue || Time.unscaledTime < _requestPendingUntil || NightActionManager.Instance == null) return;
+        var local = GetLocalState();
+        if (local == null || !local.MafiaAbilitiesInitialized || local.KillCooldownRemaining > 0f) return;
 
+        _requestPendingUntil = Time.unscaledTime + 1f;
         NightActionManager.Instance.RPC_SubmitMafiaTarget(_nearbyTarget.Value);
-        _hasSubmitted = true;
 
         UpdateKillButtonState();
     }
 
     private void UpdateKillButtonState()
     {
+        var local = GetLocalState();
+        float remaining = local != null ? local.KillCooldownRemaining : 0f;
+        bool ready = local != null && local.MafiaAbilitiesInitialized && local.IsAlive;
+        bool pending = Time.unscaledTime < _requestPendingUntil;
         if (killButton != null)
         {
-            killButton.interactable = _nearbyTarget.HasValue && !_hasSubmitted;
+            killButton.interactable = ready && remaining <= 0f && _nearbyTarget.HasValue && !pending;
         }
+        if (_buttonLabel != null) _buttonLabel.text = remaining > 0f ? $"KILL ({Mathf.CeilToInt(remaining)}s)" : "KILL";
 
         if (statusText != null)
         {
-            statusText.text = _hasSubmitted
-                ? "Target eliminated."
+            statusText.text = !ready ? "Waiting for match..."
+                : remaining > 0f ? $"Kill ready in {Mathf.CeilToInt(remaining)}s"
+                : pending ? "Checking target..."
                 : (_nearbyTarget.HasValue ? $"Press Kill to eliminate P{_nearbyTargetLabelIndex}." : "Get close to a player to kill them.");
         }
+    }
+
+    private PlayerState GetLocalState()
+    {
+        var gm = NetworkGameManager.Instance;
+        if (gm == null || !gm.IsReady || gm.Object == null || !gm.Object.IsValid || gm.Runner == null) return null;
+        var obj = gm.Runner.GetPlayerObject(gm.Runner.LocalPlayer);
+        return obj != null && obj.IsValid ? obj.GetComponent<PlayerState>() : null;
     }
 }

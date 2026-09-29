@@ -14,7 +14,7 @@ public class GameplayUIManager : MonoBehaviour
     [Tooltip("Panel with player select buttons + the Vote/Skip buttons.")]
     [SerializeField] private GameObject votingPanel;
 
-    [Tooltip("Panel with player select buttons + the Kill button — Mafia-only, Night-only.")]
+    [Tooltip("Mafia actions during free-roam: Kill uses a cooldown; Shapeshift is Night-only.")]
     [SerializeField] private GameObject nightActionPanel;
 
     [Tooltip("Panel with the Report button — shown to every alive player during free-roam gameplay so a body can be reported even after Night ends.")]
@@ -88,7 +88,7 @@ public class GameplayUIManager : MonoBehaviour
         }
 
         // Kill button/target list only ever shows for the local player if they
-        // are (a) still alive, (b) it's actually Night, AND (c) their own role
+        // are (a) still alive, (b) it's free-roam, AND (c) their own role
         // is Mafia — a Civilian/Doctor should never see a Kill button at all,
         // same reasoning as PlayerRoleManager never telling a client any role
         // but its own (see RPC_ReceiveRole's own comment).

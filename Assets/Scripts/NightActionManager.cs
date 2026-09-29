@@ -56,29 +56,14 @@ public class NightActionManager : NetworkBehaviour
     // Called by the Mafia player's own client, the instant they press Kill while
     // in range of a target (see NightActionUIManager's proximity scan) — applies
     // the kill immediately.
-    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority, HostMode = RpcHostMode.SourceIsHostPlayer)]
     public void RPC_SubmitMafiaTarget(PlayerRef target, RpcInfo info = default)
     {
         var gm = NetworkGameManager.Instance;
-        if (gm == null || !gm.IsReady || gm.CurrentPhase != NetworkGameManager.GamePhase.Night) return;
-
-        // Reject the call unless the sender is actually the Mafia — prevents a modified
-        // client from pretending to be Mafia and submitting a kill target.
-        if (PlayerRoleManager.Instance.GetServerRole(info.Source) != PlayerRole.Mafia) return;
-
-        // CONFIRMED bug class fix — same "eliminated player can still play" issue
-        // as VoteManager: roles are assigned once at RoleAssign and never cleared
-        // on death, so a Mafia player eliminated earlier still passes the role
-        // check above and could otherwise keep submitting kill targets from
-        // spectate mode. Reject any action from (or targeting) a player who is
-        // no longer alive.
-        if (!IsPlayerAlive(info.Source)) return;
-        if (!IsPlayerAlive(target)) return;
-
-        NetworkObject victimObject = Runner.GetPlayerObject(target);
-        if (victimObject != null && victimObject.TryGetComponent(out PlayerState state))
+        if (gm == null || !gm.IsReady) return;
+        var attacker = Runner.GetPlayerObject(info.Source);
+        if (attacker != null && attacker.TryGetComponent(out PlayerState state) && state.TryMafiaKill(target))
         {
-            state.Kill();
             LastNightVictim = target;
             Debug.Log($"[NightActionManager] Mafia ({info.Source}) killed {target} instantly.");
 
