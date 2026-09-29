@@ -6,8 +6,8 @@ using UnityEngine.UI;
 
 // Attach this to a "ReportPanel" GameObject (child of Canvas, sibling of
 // NightActionPanel). GameplayUIManager turns this panel on/off (for EVERY
-// alive player — not role-gated, unlike NightActionPanel — only during
-// Night) — this script just drives the single Report button while active.
+// alive player — not role-gated, unlike NightActionPanel — during free-roam
+// gameplay) — this script just drives the single Report button while active.
 //
 // Same Among-Us-style proximity pattern as NightActionUIManager, except it
 // scans for the nearest DEAD, NOT-YET-REPORTED player instead of a living
@@ -31,7 +31,7 @@ public class ReportUIManager : MonoBehaviour
     private int _nearbyBodyLabelIndex;
 
     // Fires every time the panel is enabled by GameplayUIManager — i.e. every
-    // time a new Night phase starts — so the guard resets each round.
+    // time free-roam resumes — so the local request guard resets after a meeting.
     private void OnEnable()
     {
         _hasReported = false;
@@ -87,8 +87,9 @@ public class ReportUIManager : MonoBehaviour
             NetworkObject obj = gm.Runner.GetPlayerObject(player);
             if (obj == null || !obj.TryGetComponent(out PlayerState state)) continue;
 
-            // Only a dead, not-yet-reported body counts as reportable.
-            if (state.IsAlive || state.HasBeenReported) continue;
+            // Only a visible, dead, not-yet-reported body counts as reportable.
+            // Vote/Sheriff eliminations deliberately leave no corpse in the school.
+            if (state.IsAlive || !state.IsBodyVisible || state.HasBeenReported) continue;
 
             float sqrDist = (obj.transform.position - myPos).sqrMagnitude;
             if (sqrDist <= closestSqrDist)

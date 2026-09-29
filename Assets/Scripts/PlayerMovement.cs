@@ -199,6 +199,15 @@ public class PlayerMovement : NetworkBehaviour
         if (playerState != null && !playerState.IsAlive)
             return;
 
+        // Emergency discussion uses the same Fusion input path as movement and
+        // jumping. Scene-side Input.GetKeyDown was unreliable after GameplayScene
+        // roots were moved into the runner's simulation scene. The state-authority
+        // copy handles the request once and validates distance at the hall station.
+        if (input.discussionPressed && Object.HasStateAuthority)
+        {
+            NetworkGameManager.Instance?.TryCallDiscussionFromHall(Object.InputAuthority);
+        }
+
         // Freeze everyone (alive players included) once the match has actually
         // ended — see NetworkGameManager.CheckWinCondition()/GameOver — so the
         // winner reveal screen is the sole focus instead of the "winning" side

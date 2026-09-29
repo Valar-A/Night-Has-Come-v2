@@ -10,14 +10,10 @@ public class PlayerState : NetworkBehaviour
     [Networked] public NetworkBool IsAlive { get; set; }
 
     // Whether a dead player's corpse should currently be RENDERED. This is
-    // separate from IsAlive on purpose: a Mafia kill needs the body visible
-    // in the world (so someone can walk up and Report it — see
-    // NightActionManager.RPC_ReportBody) for the rest of that Night, but the
-    // body must then disappear the instant Night ends (see
-    // NetworkGameManager.HideNightVictimBody), whether or not the Doctor goes
-    // on to revive them in the DoctorSave phase that follows. Defaults to
-    // false — a player who dies any other way (voted out, or the Doctor's own
-    // wrong guess) is never shown as a lingering corpse at all.
+    // separate from IsAlive on purpose: a Mafia kill leaves a reportable body
+    // in the school across phase changes until someone reports it. Eliminations
+    // witnessed by everyone (vote or Sheriff action) pass false to Kill() and do
+    // not leave a reportable corpse.
     [Networked] public NetworkBool IsBodyVisible { get; set; }
 
     // HasBeenReported tracks whether some other living player has already found and
@@ -58,13 +54,13 @@ public class PlayerState : NetworkBehaviour
     // Server-only — call this to eliminate a player. Called the INSTANT a Mafia
     // presses Kill while in range (see NightActionManager.RPC_SubmitMafiaTarget),
     // or by the Doctor's own wrong guess during DoctorSave.
-    public void Kill()
+    public void Kill(bool leaveReportableBody = true)
     {
         if (!Object.HasStateAuthority) return;
         if (!IsAlive) return; // already dead, ignore
 
         IsAlive = false;
-        IsBodyVisible = true; // visible immediately so it can be found & reported this Night
+        IsBodyVisible = leaveReportableBody;
         HasBeenReported = false; // fresh death — reset in case this player was revived+re-killed before
         Debug.Log($"[PlayerState] Player {Object.InputAuthority} was eliminated.");
     }
@@ -98,6 +94,7 @@ public class PlayerState : NetworkBehaviour
     {
         if (!Object.HasStateAuthority) return;
         HasBeenReported = true;
+        IsBodyVisible = false;
     }
 
     // Runs on every client every rendered frame — detects the networked

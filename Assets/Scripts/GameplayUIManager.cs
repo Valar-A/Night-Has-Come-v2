@@ -17,7 +17,7 @@ public class GameplayUIManager : MonoBehaviour
     [Tooltip("Panel with player select buttons + the Kill button — Mafia-only, Night-only.")]
     [SerializeField] private GameObject nightActionPanel;
 
-    [Tooltip("Panel with the Report button — shown to EVERY alive player (not role-gated, same as Among Us) during Night, so anyone who stumbles on a body can report it.")]
+    [Tooltip("Panel with the Report button — shown to every alive player during free-roam gameplay so a body can be reported even after Night ends.")]
     [SerializeField] private GameObject reportPanel;
 
     [Tooltip("Panel with the DEAD-player list + Confirm button — Doctor-only, shown during Discussion while their ONE revive for the whole match is still unspent.")]
@@ -105,8 +105,8 @@ public class GameplayUIManager : MonoBehaviour
         }
 
         // Report button is NOT role-gated — any alive player (Mafia included,
-        // same as Among Us) can walk up to a body and report it during Night.
-        bool showReport = isConnected && localPlayerAlive && gm.CurrentPhase == NetworkGameManager.GamePhase.Night;
+        // same as Among Us) can report a body during any free-roam phase.
+        bool showReport = isConnected && localPlayerAlive && gm.CanCallDiscussion;
 
         if (reportPanel != null && reportPanel.activeSelf != showReport)
         {

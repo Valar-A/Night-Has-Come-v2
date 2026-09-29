@@ -5,11 +5,8 @@ using UnityEngine;
 //
 // Kill flow: a Mafia kill applies THE INSTANT the Kill button is pressed while in
 // range (see NightActionUIManager) — no queueing. The body stays visible in the
-// world only until Night actually ends (see PlayerState.IsBodyVisible /
-// NetworkGameManager.HideNightVictimBody) — OR until some other living player
-// walks up and reports it first, which jumps the match straight into Discussion
-// (RPC_ReportBody / NetworkGameManager.ForceDiscussion), skipping the rest of
-// this entirely.
+// school across phase changes until another living player reports it, which calls
+// an event-driven Discussion (RPC_ReportBody / NetworkGameManager.ForceDiscussion).
 //
 // Doctor flow — REWORKED AGAIN: the Doctor has no nightly ability at all now.
 // They get ONE revive for the entire match, spent during Discussion on any dead
@@ -99,24 +96,35 @@ public class NightActionManager : NetworkBehaviour
     public void RPC_ReportBody(PlayerRef body, RpcInfo info = default)
     {
         var gm = NetworkGameManager.Instance;
-        if (gm == null || !gm.IsReady || gm.CurrentPhase != NetworkGameManager.GamePhase.Night) return;
+        if (gm == null || !gm.IsReady || !gm.CanCallDiscussion) return;
 
         // A dead player can't report anything — same "eliminated player can still
         // act" defense used everywhere else in this file.
         if (!IsPlayerAlive(info.Source)) return;
 
+        NetworkObject reporterObject = Runner.GetPlayerObject(info.Source);
         NetworkObject bodyObject = Runner.GetPlayerObject(body);
         if (bodyObject == null || !bodyObject.TryGetComponent(out PlayerState state)) return;
 
         // Must actually be a body (not a living player), and not already reported —
         // otherwise the same corpse could be reported over and over, re-triggering
-        // Discussion every time someone walks past it again in a later Night.
-        if (state.IsAlive || state.HasBeenReported) return;
+        // Discussion every time someone walks past it again. Invisible vote/sheriff
+        // eliminations are not reportable bodies either.
+        if (state.IsAlive || !state.IsBodyVisible || state.HasBeenReported) return;
+
+        // Never trust the client's proximity scan. The server independently checks
+        // the reporter is actually standing close enough to this body.
+        const float serverReportRange = 4.5f;
+        if (reporterObject == null
+            || Vector3.Distance(reporterObject.transform.position, bodyObject.transform.position) > serverReportRange)
+        {
+            return;
+        }
 
         state.MarkReported();
         Debug.Log($"[NightActionManager] {info.Source} reported {body}'s body!");
 
-        gm.ForceDiscussion();
+        gm.ForceDiscussion($"body report ({info.Source})");
     }
 
     // THE DOCTOR'S ONE REVIVE. Called by the Doctor's own client during Discussion.
@@ -235,7 +243,7 @@ public class NightActionManager : NetworkBehaviour
         bool targetIsMafia = PlayerRoleManager.Instance.GetServerRole(target) == PlayerRole.Mafia;
         if (targetIsMafia)
         {
-            targetState.Kill();
+            targetState.Kill(false);
             Debug.Log($"[NightActionManager] Sheriff ({info.Source}) shot {target} — correct, they were Mafia and are eliminated.");
         }
         else
@@ -245,7 +253,7 @@ public class NightActionManager : NetworkBehaviour
             NetworkObject sheriffObject = Runner.GetPlayerObject(info.Source);
             if (sheriffObject != null && sheriffObject.TryGetComponent(out PlayerState sheriffState))
             {
-                sheriffState.Kill();
+                sheriffState.Kill(false);
             }
             Debug.Log($"[NightActionManager] Sheriff ({info.Source}) shot {target} — wrong, they were not Mafia. The Sheriff dies instead.");
         }

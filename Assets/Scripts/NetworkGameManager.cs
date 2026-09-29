@@ -37,9 +37,9 @@ public class NetworkGameManager : NetworkBehaviour
         // in which the Doctor blind-guessed who the Mafia had killed that Night —
         // right guess revived them, wrong guess killed whoever was picked. That
         // whole mechanic is gone. The Doctor now gets ONE revive for the entire
-        // match, spent during Discussion on any dead player they choose: a single
-        // deliberate decision instead of a nightly coin flip. Night therefore runs
-        // straight into Discussion. See NightActionManager.RPC_SubmitDoctorRevive.
+        // match, spent during an event-triggered Discussion on any dead player they
+        // choose. Night returns to Day unless a hall-button/body-report meeting
+        // interrupts free-roam play. See NightActionManager.RPC_SubmitDoctorRevive.
         Discussion,
         Voting,
         GameOver
@@ -58,13 +58,15 @@ public class NetworkGameManager : NetworkBehaviour
     [Networked] public GamePhase CurrentPhase { get; private set; }
     [Networked] public WinningTeam Winner { get; private set; }
     [Networked] private TickTimer PhaseTimer { get; set; }
+    [Networked] private GamePhase ResumePhaseAfterMeeting { get; set; }
+    [Networked] private float ResumePhaseTimeRemaining { get; set; }
 
     // --- Phase durations in seconds (tune these later against your GDD's timing table) ---
     [Header("Phase Durations (seconds)")]
     [SerializeField] private float dayDuration = 60f;
     [SerializeField] private float sunsetDuration = 5f;
     [SerializeField] private float nightDuration = 30f;
-    [SerializeField] private float discussionDuration = 45f;
+    [SerializeField] private float discussionDuration = 120f;
     [SerializeField] private float votingDuration = 20f;
 
     // Track last phase locally on each client so we can detect a change and react to it
@@ -81,6 +83,7 @@ public class NetworkGameManager : NetworkBehaviour
     private PlayerRoleManager _roleManager;
     private NightActionManager _nightActionManager;
     private VoteManager _voteManager;
+    private TaskManager _taskManager;
     public static NetworkGameManager Instance { get; private set; }
 
     // External scripts (UI, etc.) MUST check this before reading any [Networked]
@@ -92,6 +95,7 @@ public class NetworkGameManager : NetworkBehaviour
         _roleManager = GetComponent<PlayerRoleManager>();
         _nightActionManager = GetComponent<NightActionManager>();
         _voteManager = GetComponent<VoteManager>();
+        _taskManager = GetComponent<TaskManager>();
         Instance = this;
     }
 
@@ -168,9 +172,9 @@ public class NetworkGameManager : NetworkBehaviour
         }
     }
 
-    private void StartTimerForCurrentPhase()
+    private float GetDurationForPhase(GamePhase phase)
     {
-        float duration = CurrentPhase switch
+        return phase switch
         {
             GamePhase.RoleAssign => 3f, // short buffer so clients receive their role RPC
             GamePhase.Day => dayDuration,
@@ -180,6 +184,11 @@ public class NetworkGameManager : NetworkBehaviour
             GamePhase.Voting => votingDuration,
             _ => 5f
         };
+    }
+
+    private void StartTimerForCurrentPhase(float overrideDuration = -1f)
+    {
+        float duration = overrideDuration > 0f ? overrideDuration : GetDurationForPhase(CurrentPhase);
         PhaseTimer = TickTimer.CreateFromSeconds(Runner, duration);
     }
 
@@ -187,27 +196,24 @@ public class NetworkGameManager : NetworkBehaviour
     {
         GamePhase previousPhase = CurrentPhase;
 
+        bool returningFromMeeting = previousPhase == GamePhase.Voting;
+        float resumedTime = ResumePhaseTimeRemaining;
+
         CurrentPhase = CurrentPhase switch
         {
             GamePhase.RoleAssign => GamePhase.Day,
             GamePhase.Day => GamePhase.Sunset,
             GamePhase.Sunset => GamePhase.Night,
-            GamePhase.Night => GamePhase.Discussion,
+            // Meetings are event-driven. A Night ending normally starts a new Day;
+            // it never opens Discussion/Voting by itself.
+            GamePhase.Night => GamePhase.Day,
             GamePhase.Discussion => GamePhase.Voting,
-            GamePhase.Voting => GamePhase.Day, // loop back — win-condition check happens before this in a later step
+            GamePhase.Voting => IsFreeRoamPhase(ResumePhaseAfterMeeting) ? ResumePhaseAfterMeeting : GamePhase.Day,
             _ => CurrentPhase
         };
 
-        // Kills already apply instantly the moment the Mafia presses Kill (see
-        // NightActionManager.RPC_SubmitMafiaTarget) — nothing to resolve here.
-        // But the body itself must disappear the INSTANT Night actually ends
-        // (per design — the corpse is only ever visible DURING Night, for the
-        // Report mechanic), regardless of whether the Doctor is about to undo
-        // the kill in the DoctorSave phase that (usually) follows.
-        if (previousPhase == GamePhase.Night)
-        {
-            _nightActionManager?.HideNightVictimBody();
-        }
+        // Bodies now remain in the school until somebody reports them. Ending
+        // Night must not hide them, otherwise a Day-time report is impossible.
 
         // The Doctor's revive is CHOSEN during Discussion but only LANDS here, the
         // moment Discussion ends — so a revived player never gets to rejoin the very
@@ -220,7 +226,7 @@ public class NetworkGameManager : NetworkBehaviour
 
         // A fresh Night phase starting needs last Night's victim cleared, so
         // HideNightVictimBody never acts on a stale corpse from a previous round.
-        if (CurrentPhase == GamePhase.Night)
+        if (CurrentPhase == GamePhase.Night && previousPhase == GamePhase.Sunset)
         {
             _nightActionManager?.ResetForNewNight();
         }
@@ -233,7 +239,7 @@ public class NetworkGameManager : NetworkBehaviour
                 NetworkObject victimObject = Runner.GetPlayerObject(eliminated.Value);
                 if (victimObject != null && victimObject.TryGetComponent(out PlayerState state))
                 {
-                    state.Kill();
+                    state.Kill(false);
                 }
                 Debug.Log($"[NetworkGameManager] Vote result: {eliminated.Value} was voted out.");
             }
@@ -253,7 +259,7 @@ public class NetworkGameManager : NetworkBehaviour
         // (see FixedUpdateNetwork's own GameOver short-circuit).
         if (CurrentPhase != GamePhase.GameOver)
         {
-            StartTimerForCurrentPhase();
+            StartTimerForCurrentPhase(returningFromMeeting ? resumedTime : -1f);
         }
     }
 
@@ -286,7 +292,8 @@ public class NetworkGameManager : NetworkBehaviour
         bool leavingTheMeeting = previous == GamePhase.Voting || previous == GamePhase.Discussion;
         bool matchJustStarted = previous == GamePhase.RoleAssign;
 
-        if (current == GamePhase.Day && (leavingTheMeeting || matchJustStarted))
+        if ((leavingTheMeeting && IsFreeRoamPhase(current))
+            || (current == GamePhase.Day && matchJustStarted))
         {
             MovePlayersToSchool(matchJustStarted);
         }
@@ -347,7 +354,7 @@ public class NetworkGameManager : NetworkBehaviour
         }
 
         string why = matchJustStarted ? "match start" : "meeting over";
-        Debug.Log($"[NetworkGameManager] Day ({why}) — moved {moved}/{players.Count} player(s) back into the school.");
+        Debug.Log($"[NetworkGameManager] School ({why}) — moved {moved}/{players.Count} player(s) back into play.");
     }
 
     private bool TeleportPlayer(PlayerRef player, Vector3 position, Quaternion rotation)
@@ -448,6 +455,11 @@ public class NetworkGameManager : NetworkBehaviour
         // showing up.
         _nightActionManager?.ResetOncePerMatchAbilities();
 
+        // Task lists are dealt ONCE, here, for the whole match — not per round.
+        // Must come after AssignRoles() above, because who gets a FAKE list is
+        // decided by who turned out to be Mafia.
+        _taskManager?.AssignTasks();
+
         // Match has started — remove it from the public Browse Lobbies list and
         // stop accepting new joiners. Only the Host can touch SessionInfo, which
         // is exactly who's running this (guarded by HasStateAuthority above).
@@ -464,19 +476,70 @@ public class NetworkGameManager : NetworkBehaviour
         AdvanceToNextPhase();
     }
 
-    // Server-only: called by NightActionManager.RPC_ReportBody the instant some
-    // living player reports a corpse — jumps the match straight into Discussion
-    // regardless of how much of the Night timer is left. Only valid to call while
-    // still actually in Night (a stray/late report shouldn't yank the game out of
-    // some other phase it may have already moved on to).
-    public void ForceDiscussion()
+    public bool CanCallDiscussion => IsFreeRoamPhase(CurrentPhase);
+
+    private static bool IsFreeRoamPhase(GamePhase phase)
+    {
+        return phase == GamePhase.Day || phase == GamePhase.Sunset || phase == GamePhase.Night;
+    }
+
+    // Called by a validated body report or emergency-button request. The phase
+    // and its remaining time are remembered so play resumes where it was interrupted.
+    public void ForceDiscussion(string reason = "body report")
     {
         if (!Object.HasStateAuthority) return;
-        if (CurrentPhase != GamePhase.Night) return;
+        if (!IsFreeRoamPhase(CurrentPhase)) return;
+
+        ResumePhaseAfterMeeting = CurrentPhase;
+        ResumePhaseTimeRemaining = PhaseTimer.RemainingTime(Runner) ?? GetDurationForPhase(CurrentPhase);
 
         CurrentPhase = GamePhase.Discussion;
         StartTimerForCurrentPhase();
-        Debug.Log("[NetworkGameManager] A body was reported — jumping straight to Discussion.");
+        Debug.Log($"[NetworkGameManager] Discussion called by {reason}; play will resume in {ResumePhaseAfterMeeting}.");
+    }
+
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    public void RPC_RequestEmergencyDiscussion(RpcInfo info = default)
+    {
+        TryCallDiscussionFromHall(info.Source);
+    }
+
+    // Server-side entry point used by both the Fusion input stream and the optional
+    // RPC path. Resolve the station from the requester's simulation scene rather
+    // than a static singleton; multi-peer play can have several scene copies alive.
+    public void TryCallDiscussionFromHall(PlayerRef requester)
+    {
+        if (!Object.HasStateAuthority || !CanCallDiscussion) return;
+
+        NetworkObject playerObject = Runner.GetPlayerObject(requester);
+        if (playerObject == null || !playerObject.TryGetComponent(out PlayerState playerState) || !playerState.IsAlive)
+        {
+            Debug.LogWarning($"[NetworkGameManager] Hall discussion rejected: {requester} has no living player object.");
+            return;
+        }
+
+        EmergencyDiscussionButton station = null;
+        foreach (GameObject root in playerObject.gameObject.scene.GetRootGameObjects())
+        {
+            station = root.GetComponentInChildren<EmergencyDiscussionButton>(true);
+            if (station != null) break;
+        }
+
+        if (station == null)
+        {
+            Debug.LogWarning($"[NetworkGameManager] Hall discussion rejected: no station exists in {requester}'s simulation scene.");
+            return;
+        }
+
+        float allowedDistance = station.InteractRadius + 1.5f;
+        if (Vector3.Distance(playerObject.transform.position, station.transform.position) > allowedDistance)
+        {
+            Debug.LogWarning($"[NetworkGameManager] Hall discussion rejected: {requester} is not near the station.");
+            return;
+        }
+
+        Debug.Log($"[NetworkGameManager] Hall discussion accepted from {requester}.");
+        ForceDiscussion($"hall button ({requester})");
     }
 
     // DEBUG ONLY — jumps straight to an arbitrary phase, bypassing normal transition

@@ -70,6 +70,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: edf9cf3a663a5ea499889cb9539cfbac, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::NetworkGameManager
+  _DoctorReviveUsed:
+    _value: 0
+  _SheriffShotUsed:
+    _value: 0
 --- !u!114 &8456545676446073431
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -99,8 +103,7 @@ MonoBehaviour:
   dayDuration: 60
   sunsetDuration: 5
   nightDuration: 30
-  doctorSaveDuration: 15
-  discussionDuration: 45
+  discussionDuration: 120
   votingDuration: 20
   minPlayersToStart: 2
 --- !u!114 &6640044188489281899

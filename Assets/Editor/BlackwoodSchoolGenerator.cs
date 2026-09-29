@@ -642,10 +642,27 @@ public static class BlackwoodSchoolGenerator
         GameObject spawnRoot  = Child(parent, "SpawnPoints");
 
         foreach (Node n in TaskNodes)
-            Marker(taskRoot.transform, "TaskNode_" + n.Name, new Vector3(n.X, Levels[n.LevelIndex].Y + 0.6f, n.Z), 0.55f, _matTask);
+        {
+            GameObject go = Marker(taskRoot.transform, "TaskNode_" + n.Name,
+                                   new Vector3(n.X, Levels[n.LevelIndex].Y + 0.6f, n.Z), 0.55f, _matTask);
+            // The task system reads everything it needs off this component — the
+            // human-readable name for the HUD, and the floor for route balancing
+            // (so nobody is handed five tasks that are all in the basement).
+            go.AddComponent<TaskNodeMarker>()
+              .Configure(n.Name, TaskNodeKind.Assigned, n.LevelIndex, Levels[n.LevelIndex].Name);
+        }
 
         foreach (Node n in CommonTaskNodes)
-            Marker(commonRoot.transform, "CommonTask_" + n.Name, new Vector3(n.X, Levels[n.LevelIndex].Y + 0.6f, n.Z), 0.7f, _matCommon);
+        {
+            // Strip the "COMMON " prefix for display — it exists to make the node
+            // obvious in the Hierarchy, not to be shown to players.
+            string display = n.Name.StartsWith("COMMON ") ? n.Name.Substring(7) : n.Name;
+
+            GameObject go = Marker(commonRoot.transform, "CommonTask_" + n.Name,
+                                   new Vector3(n.X, Levels[n.LevelIndex].Y + 0.6f, n.Z), 0.7f, _matCommon);
+            go.AddComponent<TaskNodeMarker>()
+              .Configure(display, TaskNodeKind.Common, n.LevelIndex, Levels[n.LevelIndex].Name);
+        }
 
         // Benches are boxes rather than markers — they are physical objects the
         // player walks up to and stands at for 5 seconds.
@@ -762,7 +779,7 @@ public static class BlackwoodSchoolGenerator
 
     // Markers are trigger-only: they must never block movement, they exist so a
     // designer can see the node and so gameplay code has a transform to bind to.
-    private static void Marker(Transform parent, string name, Vector3 pos, float size, Material mat)
+    private static GameObject Marker(Transform parent, string name, Vector3 pos, float size, Material mat)
     {
         GameObject go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         go.name = name;
@@ -772,6 +789,7 @@ public static class BlackwoodSchoolGenerator
         Collider col = go.GetComponent<Collider>();
         if (col != null) col.isTrigger = true;
         SetMat(go, mat);
+        return go;
     }
 
     private static void SetMat(GameObject go, Material mat)

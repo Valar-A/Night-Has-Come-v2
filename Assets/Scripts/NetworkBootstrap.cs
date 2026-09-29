@@ -653,6 +653,7 @@ public class NetworkBootstrap : MonoBehaviour, INetworkRunnerCallbacks
             vertical = Input.GetAxisRaw("Vertical"),
             running = Input.GetKey(KeyCode.LeftShift),
             jumpPressed = Input.GetKeyDown(KeyCode.Space),
+            discussionPressed = Input.GetKeyDown(KeyCode.E),
             cameraYaw = cameraYaw
         };
         input.Set(data);
@@ -1098,5 +1099,6 @@ public struct NetworkInputData : INetworkInput
     public float vertical;
     public NetworkBool running;
     public NetworkBool jumpPressed;
+    public NetworkBool discussionPressed;
     public float cameraYaw;
 }
