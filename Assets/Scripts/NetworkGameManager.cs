@@ -443,6 +443,12 @@ public class NetworkGameManager : NetworkBehaviour
             return;
         }
 
+        if (!AllPlayersHaveCharacterSelections())
+        {
+            Debug.LogWarning("[NetworkGameManager] Match cannot start until every player has selected a character.");
+            return;
+        }
+
         CurrentPhase = GamePhase.RoleAssign;
         StartTimerForCurrentPhase();
         _roleManager?.AssignRoles();
@@ -454,6 +460,12 @@ public class NetworkGameManager : NetworkBehaviour
         // is the single easiest way to break this whole design without any error
         // showing up.
         _nightActionManager?.ResetOncePerMatchAbilities();
+        foreach (PlayerRef player in Runner.ActivePlayers)
+        {
+            var playerObject = Runner.GetPlayerObject(player);
+            if (playerObject != null && playerObject.TryGetComponent(out PlayerState state))
+                state.InitializeMafiaAbilities();
+        }
 
         // Task lists are dealt ONCE, here, for the whole match — not per round.
         // Must come after AssignRoles() above, because who gets a FAKE list is
@@ -465,6 +477,24 @@ public class NetworkGameManager : NetworkBehaviour
         // is exactly who's running this (guarded by HasStateAuthority above).
         Runner.SessionInfo.IsVisible = false;
         Runner.SessionInfo.IsOpen = false;
+    }
+
+    public bool AllPlayersHaveCharacterSelections()
+    {
+        if (!IsReady || Object == null || !Object.IsValid || Runner == null) return false;
+
+        foreach (PlayerRef player in Runner.ActivePlayers)
+        {
+            NetworkObject playerObject = Runner.GetPlayerObject(player);
+            if (playerObject == null
+                || !playerObject.TryGetComponent(out PlayerState state)
+                || !state.HasSelectedCharacter)
+            {
+                return false;
+            }
+        }
+
+        return Runner.ActivePlayers.Any();
     }
 
     // Server-only: skips whatever's left of the current phase's timer and immediately

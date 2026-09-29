@@ -22,6 +22,7 @@ public class LobbyUIManager : MonoBehaviour
     {
         if (playerCountText == null) Debug.LogError("[LobbyUIManager] Player Count Text is not assigned!", this);
         if (startGameButton == null) Debug.LogError("[LobbyUIManager] Start Game Button is not assigned!", this);
+        else startGameButton.interactable = false;
         if (gameCodeText == null) Debug.LogWarning("[LobbyUIManager] Game Code Text is not assigned — the game code won't be shown.", this);
     }
 
@@ -53,7 +54,13 @@ public class LobbyUIManager : MonoBehaviour
         // Only the Host ever sees/uses the Start Game button — clients just wait.
         bool isHost = gm.Runner.IsServer;
         startGameButton.gameObject.SetActive(isHost);
-        startGameButton.interactable = isHost && playerCount >= gm.MinPlayersToStart;
+        // A character is a required lobby choice. The button stays disabled until
+        // every connected player owns one unique selection; BeginMatch validates
+        // this again server-side so a modified client cannot bypass the UI.
+        bool allCharactersSelected = gm.AllPlayersHaveCharacterSelections();
+        startGameButton.interactable = isHost
+            && playerCount >= gm.MinPlayersToStart
+            && allCharactersSelected;
 
         // Game code is only meaningful to the Host (who generated it) — clients
         // already used it to join, no need to show it to them.

@@ -9,6 +9,80 @@ public class PlayerState : NetworkBehaviour
 {
     [Networked] public NetworkBool IsAlive { get; set; }
 
+    // Public lobby appearance choice. Roles remain completely separate and are not
+    // assigned until the match starts. The Host is the only writer: clients request
+    // a slot through RPC_RequestCharacter and the Host rejects duplicates.
+    [Networked] public NetworkBool HasSelectedCharacter { get; private set; }
+    [Networked] public int SelectedCharacterId { get; private set; }
+    [Networked] public TickTimer MafiaKillCooldown { get; private set; }
+    [Networked] public NetworkBool MafiaAbilitiesInitialized { get; private set; }
+    [Networked] public NetworkBool ShapeshiftUsed { get; private set; }
+    [Networked] public NetworkBool IsShapeshifted { get; private set; }
+    [Networked] public int DisguiseCharacterId { get; private set; }
+
+    public const float KillCooldownSeconds = 30f;
+    public const float KillRange = 3f;
+    public int VisibleCharacterId => IsShapeshifted ? DisguiseCharacterId : (HasSelectedCharacter ? SelectedCharacterId : -1);
+    public float KillCooldownRemaining => MafiaKillCooldown.RemainingTime(Runner) ?? 0f;
+
+    public void InitializeMafiaAbilities()
+    {
+        if (!Object.HasStateAuthority) return;
+        MafiaAbilitiesInitialized = true;
+        MafiaKillCooldown = TickTimer.CreateFromSeconds(Runner, KillCooldownSeconds);
+        ShapeshiftUsed = false;
+        IsShapeshifted = false;
+    }
+
+    public bool TryMafiaKill(PlayerRef target)
+    {
+        if (!Object.HasStateAuthority || !MafiaAbilitiesInitialized || !IsAlive) return false;
+        var gm = NetworkGameManager.Instance;
+        var roles = PlayerRoleManager.Instance;
+        if (gm == null || !gm.IsReady || !NetworkGameManager.IsFreeRoamPhase(gm.CurrentPhase)) return false;
+        if (roles == null || roles.GetServerRole(Object.InputAuthority) != PlayerRole.Mafia) return false;
+        if (!MafiaKillCooldown.ExpiredOrNotRunning(Runner) || target == Object.InputAuthority) return false;
+        var victim = Runner.GetPlayerObject(target);
+        if (victim == null || !victim.TryGetComponent(out PlayerState state) || !state.IsAlive) return false;
+        if ((victim.transform.position - transform.position).sqrMagnitude > KillRange * KillRange) return false;
+        // Spend the cooldown before resolving the kill, so repeated requests in
+        // the same tick cannot eliminate multiple targets.
+        MafiaKillCooldown = TickTimer.CreateFromSeconds(Runner, KillCooldownSeconds);
+        state.Kill();
+        return true;
+    }
+
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
+    public void RPC_RequestShapeshift(PlayerRef target)
+    {
+        TryShapeshift(target);
+    }
+
+    public bool TryShapeshift(PlayerRef target)
+    {
+        if (!Object.HasStateAuthority || !MafiaAbilitiesInitialized || !IsAlive || ShapeshiftUsed) return false;
+        var gm = NetworkGameManager.Instance;
+        var roles = PlayerRoleManager.Instance;
+        if (gm == null || !gm.IsReady || gm.CurrentPhase != NetworkGameManager.GamePhase.Night) return false;
+        if (roles == null || roles.GetServerRole(Object.InputAuthority) != PlayerRole.Mafia) return false;
+        if (target == Object.InputAuthority) return false;
+        var targetObject = Runner.GetPlayerObject(target);
+        if (targetObject == null || !targetObject.TryGetComponent(out PlayerState state)
+            || !state.IsAlive || !state.HasSelectedCharacter || !CharacterSelectionCatalog.IsValid(state.SelectedCharacterId)) return false;
+        DisguiseCharacterId = state.SelectedCharacterId;
+        IsShapeshifted = true;
+        ShapeshiftUsed = true;
+        return true;
+    }
+
+    public override void FixedUpdateNetwork()
+    {
+        if (!Object.HasStateAuthority || !IsShapeshifted) return;
+        var gm = NetworkGameManager.Instance;
+        if (!IsAlive || gm == null || !gm.IsReady || gm.CurrentPhase != NetworkGameManager.GamePhase.Night)
+            IsShapeshifted = false;
+    }
+
     // Whether a dead player's corpse should currently be RENDERED. This is
     // separate from IsAlive on purpose: a Mafia kill leaves a reportable body
     // in the school across phase changes until someone reports it. Eliminations
@@ -32,6 +106,19 @@ public class PlayerState : NetworkBehaviour
     private Renderer[] _renderers;
     private SimpleKCC _kcc;
     private Animator _animator;
+    private int _lastAppliedCharacterId = int.MinValue;
+    private MaterialPropertyBlock _characterTintBlock;
+
+    private static readonly int BaseColorProperty = Shader.PropertyToID("_BaseColor");
+    private static readonly int ColorProperty = Shader.PropertyToID("_Color");
+
+    private void Awake()
+    {
+        // UnityEngine.Objects must not be created from a MonoBehaviour field
+        // initializer. Awake runs after Unity has constructed the component and is
+        // therefore the safe place to allocate the reusable property block.
+        _characterTintBlock = new MaterialPropertyBlock();
+    }
 
     public override void Spawned()
     {
@@ -44,11 +131,46 @@ public class PlayerState : NetworkBehaviour
             IsAlive = true;
             IsBodyVisible = false;
             HasBeenReported = false;
+
+            // HasSelectedCharacter defaults to false on a fresh NetworkObject. Do
+            // not assign it here: a Host Migration restores this PlayerState from a
+            // Fusion snapshot, and Spawned() must not overwrite that restored choice.
         }
 
         _wasAlive = IsAlive;
         _wasBodyVisible = IsBodyVisible;
         ApplyVisualState();
+        ApplyCharacterVisual();
+    }
+
+    // Called on the player's own NetworkObject, so Fusion only accepts it from that
+    // object's Input Authority. The Host independently checks phase, range and every
+    // other active player's choice before reserving the requested character.
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
+    public void RPC_RequestCharacter(int characterId, RpcInfo info = default)
+    {
+        NetworkGameManager gm = NetworkGameManager.Instance;
+        if (gm == null || !gm.IsReady || gm.CurrentPhase != NetworkGameManager.GamePhase.Lobby) return;
+        if (!CharacterSelectionCatalog.IsValid(characterId)) return;
+
+        foreach (PlayerRef player in Runner.ActivePlayers)
+        {
+            if (player == info.Source) continue;
+
+            NetworkObject otherObject = Runner.GetPlayerObject(player);
+            if (otherObject != null
+                && otherObject.TryGetComponent(out PlayerState otherState)
+                && otherState.HasSelectedCharacter
+                && otherState.SelectedCharacterId == characterId)
+            {
+                Debug.LogWarning($"[PlayerState] {info.Source} requested character {characterId}, but it is already reserved by {player}.");
+                return;
+            }
+        }
+
+        HasSelectedCharacter = true;
+        SelectedCharacterId = characterId;
+        Debug.Log($"[PlayerState] {info.Source} selected character {characterId} ({CharacterSelectionCatalog.GetName(characterId)}).");
     }
 
     // Server-only — call this to eliminate a player. Called the INSTANT a Mafia
@@ -60,6 +182,7 @@ public class PlayerState : NetworkBehaviour
         if (!IsAlive) return; // already dead, ignore
 
         IsAlive = false;
+        IsShapeshifted = false;
         IsBodyVisible = leaveReportableBody;
         HasBeenReported = false; // fresh death — reset in case this player was revived+re-killed before
         Debug.Log($"[PlayerState] Player {Object.InputAuthority} was eliminated.");
@@ -102,7 +225,9 @@ public class PlayerState : NetworkBehaviour
     // on host and clients).
     public override void Render()
     {
-        if (IsAlive == _wasAlive && IsBodyVisible == _wasBodyVisible) return;
+        int visibleCharacterId = VisibleCharacterId;
+        bool characterChanged = visibleCharacterId != _lastAppliedCharacterId;
+        if (IsAlive == _wasAlive && IsBodyVisible == _wasBodyVisible && !characterChanged) return;
 
         bool justDied = !IsAlive && _wasAlive;
         bool justRevived = IsAlive && !_wasAlive;
@@ -110,6 +235,7 @@ public class PlayerState : NetworkBehaviour
         _wasAlive = IsAlive;
         _wasBodyVisible = IsBodyVisible;
         ApplyVisualState();
+        if (characterChanged) ApplyCharacterVisual();
 
         if (!Object.HasInputAuthority) return;
 
@@ -122,6 +248,30 @@ public class PlayerState : NetworkBehaviour
         else if (justRevived)
         {
             SpectatorController.Instance?.ExitSpectateMode();
+        }
+    }
+
+    private void ApplyCharacterVisual()
+    {
+        if (_characterTintBlock == null)
+            _characterTintBlock = new MaterialPropertyBlock();
+
+        int characterId = VisibleCharacterId;
+        _lastAppliedCharacterId = characterId;
+
+        // Temporary visualisation while the ten final models do not exist yet.
+        // Every network peer sees the same selected tint. Later this method becomes
+        // the single swap point for CharacterVisualRoot prefabs/portraits.
+        Color tint = CharacterSelectionCatalog.GetTint(characterId);
+        if (_renderers == null) return;
+
+        foreach (Renderer renderer in _renderers)
+        {
+            if (renderer == null) continue;
+            renderer.GetPropertyBlock(_characterTintBlock);
+            _characterTintBlock.SetColor(BaseColorProperty, tint);
+            _characterTintBlock.SetColor(ColorProperty, tint);
+            renderer.SetPropertyBlock(_characterTintBlock);
         }
     }
 
