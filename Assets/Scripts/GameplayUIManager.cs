@@ -97,7 +97,7 @@ public class GameplayUIManager : MonoBehaviour
             && PlayerRoleManager.Instance.LocalRole == PlayerRole.Mafia;
 
         bool showNightAction = isConnected && localPlayerAlive && localPlayerIsMafia
-            && gm.CurrentPhase == NetworkGameManager.GamePhase.Night;
+            && NetworkGameManager.IsFreeRoamPhase(gm.CurrentPhase);
 
         if (nightActionPanel != null && nightActionPanel.activeSelf != showNightAction)
         {
