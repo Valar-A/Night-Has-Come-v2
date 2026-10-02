@@ -419,6 +419,7 @@ public class NetworkGameManager : NetworkBehaviour
         if (result != WinningTeam.None)
         {
             Winner = result;
+            _taskManager?.SettleResources();
             CurrentPhase = GamePhase.GameOver;
             Debug.Log($"[NetworkGameManager] Game Over — {result} win! (alive Mafia={aliveMafia}, alive others={aliveOthers})");
         }

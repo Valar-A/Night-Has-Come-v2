@@ -14,6 +14,7 @@ GameObject:
   - component: {fileID: 8456545676446073431}
   - component: {fileID: 4323149168251915428}
   - component: {fileID: 6640044188489281899}
+  - component: {fileID: 1182828894507278168}
   m_Layer: 0
   m_Name: GameManagerPrefab
   m_TagString: Untagged
@@ -57,6 +58,7 @@ MonoBehaviour:
   - {fileID: 8456545676446073431}
   - {fileID: 4323149168251915428}
   - {fileID: 6640044188489281899}
+  - {fileID: 1182828894507278168}
   ForceRemoteRenderTimeframe: 0
 --- !u!114 &3125466577608545573
 MonoBehaviour:
@@ -118,3 +120,32 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 0ec785336efe11e4f894451f742628e7, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PlayerRoleManager
+--- !u!114 &1182828894507278168
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3852338291486472025}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a53591a13af273e4db3d9a2c71ecc464, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::TaskManager
+  metalCost: 3
+  wireCost: 3
+  chemicalCost: 3
+  resourceReward: 1
+  coinsPerResource: 1
+  _ShieldClaimed:
+    _value: 0
+  _ResourcesSettled:
+    _value: 0
+  _TasksAssigned:
+    _value: 0
+  _RewardMatchId:
+    _length: 0
+    _data:
+      Data: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+  _TasksCompletedThisMatch: 0
+  _CommonTaskIndex: 0

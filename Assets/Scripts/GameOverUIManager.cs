@@ -91,6 +91,11 @@ public class GameOverUIManager : MonoBehaviour
             }
 
             roleRevealText.text = sb.ToString();
+            if (TaskManager.Instance != null && TaskManager.Instance.TryGetInventory(gm.Runner.LocalPlayer, out var inventory))
+            {
+                LocalCoinWallet.CreditOnce(TaskManager.Instance.RewardMatchId.ToString(), inventory.Coins);
+                roleRevealText.text += $"\nRESOURCE CONVERSION: +{inventory.Coins} coins\nWALLET: {LocalCoinWallet.Balance} coins";
+            }
         }
     }
 

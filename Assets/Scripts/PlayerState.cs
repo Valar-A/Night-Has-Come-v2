@@ -48,6 +48,7 @@ public class PlayerState : NetworkBehaviour
         // Spend the cooldown before resolving the kill, so repeated requests in
         // the same tick cannot eliminate multiple targets.
         MafiaKillCooldown = TickTimer.CreateFromSeconds(Runner, KillCooldownSeconds);
+        if (TaskManager.Instance != null && TaskManager.Instance.TryAbsorbMafiaAttack(target)) return false;
         state.Kill();
         return true;
     }

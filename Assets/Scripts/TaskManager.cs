@@ -77,7 +77,7 @@ public struct TaskAssignment : INetworkStruct
 //
 // Owns: who has which tasks, which of them are done, and the single global
 // "tasks completed" number the HUD shows.
-public class TaskManager : NetworkBehaviour
+public partial class TaskManager : NetworkBehaviour
 {
     public const int TasksPerPlayer = 6;     // 1 common + 5 assigned
     public const int AssignedPerPlayer = 5;
@@ -110,10 +110,13 @@ public class TaskManager : NetworkBehaviour
     public override void Spawned()
     {
         Instance = this;
+        TaskNodeRegistry.Forget();
     }
 
     public override void Render()
     {
+        if (ResourcesSettled && TryGetInventory(Runner.LocalPlayer, out var inventory))
+            LocalCoinWallet.CreditOnce(RewardMatchId.ToString(), inventory.Coins);
         if (TasksCompletedThisMatch != _lastSeenCompleted)
         {
             _lastSeenCompleted = TasksCompletedThisMatch;
@@ -136,14 +139,12 @@ public class TaskManager : NetworkBehaviour
         if (!Object.HasStateAuthority) return;
 
         Assignments.Clear();
+        ResetCrafting();
         TasksCompletedThisMatch = 0;
         _lastSeenCompleted = -1;
 
-        if (!TaskNodeRegistry.Resolve())
-        {
-            Debug.LogError("[TaskManager] No task nodes found in the level — nobody can be given any tasks. Re-run Tools/Blackwood/Generate School Blockout; the markers need the TaskNodeMarker component, which older blockouts do not have.");
-            return;
-        }
+        TasksAssigned = false;
+        if (!TaskNodeRegistry.Resolve()) return; // GameplayScene loads after BeginMatch.
 
         // One common task for everyone, picked fresh each match.
         CommonTaskIndex = TaskNodeRegistry.PickRandomCommonIndex();
@@ -157,6 +158,7 @@ public class TaskManager : NetworkBehaviour
         }
 
         int real = Assignments.Count(kv => !kv.Value.IsFake);
+        TasksAssigned = true;
         Debug.Log($"[TaskManager] Dealt {TasksPerPlayer} task(s) each to {Assignments.Count} player(s) — {real} real list(s), {Assignments.Count - real} fake. Common task this match: {TaskNodeRegistry.GetDisplayName(CommonTaskIndex)}.");
     }
 
@@ -232,15 +234,12 @@ public class TaskManager : NetworkBehaviour
 
     // Sent by a client the moment its local hold-to-work finishes. Everything the
     // client claims is re-checked here; nothing about this RPC is trusted.
-    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
-    public void RPC_CompleteTask(byte nodeIndex, RpcInfo info = default)
+    private void CompleteTask(byte nodeIndex, PlayerRef sender)
     {
         if (!Object.HasStateAuthority) return;
 
-        PlayerRef sender = info.Source;
-
         var gm = NetworkGameManager.Instance;
-        if (gm == null || gm.CurrentPhase != NetworkGameManager.GamePhase.Day)
+        if (gm == null || !NetworkGameManager.IsFreeRoamPhase(gm.CurrentPhase))
         {
             Debug.LogWarning($"[TaskManager] Rejected task completion from {sender} — tasks can only be worked on during Day (phase is {(gm != null ? gm.CurrentPhase.ToString() : "unknown")}).");
             return;
@@ -306,6 +305,7 @@ public class TaskManager : NetworkBehaviour
         if (!assignment.IsFake)
         {
             TasksCompletedThisMatch++;
+            RewardResources(sender);
         }
 
         Debug.Log($"[TaskManager] {sender} completed '{node.DisplayName}' (slot {slot}{(assignment.IsFake ? ", FAKE" : "")}). Global completed: {TasksCompletedThisMatch}.");
