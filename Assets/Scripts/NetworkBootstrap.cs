@@ -644,7 +644,7 @@ public class NetworkBootstrap : MonoBehaviour, INetworkRunnerCallbacks
         float cameraYaw = 0f;
         if (CameraFollow.Instance != null)
         {
-            cameraYaw = CameraFollow.Instance.transform.eulerAngles.y;
+            cameraYaw = CameraFollow.Instance.MovementYaw;
         }
 
         var data = new NetworkInputData

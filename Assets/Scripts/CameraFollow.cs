@@ -16,12 +16,65 @@ public class CameraFollow : MonoBehaviour
     public float mouseSensitivity = 3f;
     public float smoothSpeed = 10f;
 
+    [Header("Movement framing")]
+    [Min(0.1f)] public float fullSpeed = 6f;
+    [Min(0f)] public float movementLookAhead = 0.2f;
+    [Min(0f)] public float runningDistance = 0f;
+    [Range(-15f, 15f)] public float runningPitchOffset = 2f;
+    [Range(0f, 20f)] public float runningFovIncrease = 0f;
+    [Min(0.1f)] public float framingResponse = 4f;
+    [Min(1f)] public float teleportResetDistance = 10f;
+
+    [Header("Shoulder framing (free roam)")]
+    [Min(0.5f)] public float shoulderDistance = 2.2f;
+    [Min(0.1f)] public float shoulderHeight = 1.65f;
+    [Range(-1.5f, 1.5f)] public float shoulderOffset = 0.55f;
+
+    [Header("Movement camera assistance")]
+    public bool autoAlign = true;
+    [Min(0f)] public float autoAlignDelay = 1.25f;
+    [Min(0f)] public float autoAlignSpeed = 70f;
+    [Min(0f)] public float autoAlignMinimumSpeed = 0.35f;
+    [Range(-20f, 60f)] public float neutralPitch = 15f;
+
+    [Header("Wall avoidance")]
+    public LayerMask obstructionLayers = Physics.DefaultRaycastLayers;
+    [Min(0.05f)] public float collisionRadius = 0.22f;
+    [Min(0.01f)] public float wallPadding = 0.06f;
+    [Min(0.1f)] public float collisionRecoverySpeed = 4f;
+
+    [Header("Meeting framing")]
+    [Min(0.5f)] public float meetingDistance = 4f;
+    [Range(-20f, 60f)] public float meetingPitch = 18f;
+
+    // Movement input uses the orbit yaw, so a sideways focus offset cannot
+    // feed back into camera-relative movement and gradually steer the player.
+    public float MovementYaw => _movementYaw;
+    private float _movementYaw;
+    private Vector2 _previousMoveInput;
+    private float _manualLookGrace;
+    private bool _wasMeeting;
+    private float _boomLength;
+    private float _shoulderBlend;
+    private RaycastHit[] _wallHits = new RaycastHit[32];
+    private Collider[] _overlaps = new Collider[32];
+    private Camera _camera;
+    private float _baseFov;
+    private Transform _trackedTarget;
+    private Vector3 _lastTargetPosition;
+    private Vector3 _smoothedVelocity;
+    private Vector3 _focus;
+    private float _speedBlend;
+    private bool _resetFraming = true;
+
     float yaw;
     float pitch = 15f;
 
     void Awake()
     {
         Instance = this;
+        _camera = GetComponent<Camera>();
+        if (_camera != null) _baseFov = _camera.fieldOfView;
 
         // CONFIRMED LIVE (a second, separate bug found on top of the migration one
         // below): GameplayScene's Main Camera had `target` pre-assigned in the
@@ -62,7 +115,7 @@ public class CameraFollow : MonoBehaviour
     private void TryAcquireTarget()
     {
         var gm = NetworkGameManager.Instance;
-        if (gm == null || !gm.IsReady || gm.Runner == null) return;
+        if (gm == null || !gm.IsReady || gm.Object == null || !gm.Object.IsValid || gm.Runner == null) return;
 
         var localPlayerObject = gm.Runner.GetPlayerObject(gm.Runner.LocalPlayer);
         if (localPlayerObject != null)
@@ -113,6 +166,8 @@ public class CameraFollow : MonoBehaviour
         // let SpectatorController own the camera for the rest of the match.
         if (SpectatorController.Instance != null && SpectatorController.Instance.IsSpectating)
         {
+            _resetFraming = true;
+            if (_camera != null) _camera.fieldOfView = _baseFov;
             return;
         }
 
@@ -131,33 +186,178 @@ public class CameraFollow : MonoBehaviour
         // at scene load), TryAcquireTarget() simply leaves target as-is for that
         // frame and the next frame tries again.
         TryAcquireTarget();
-        if (target == null) return;
+        if (target == null)
+        {
+            _resetFraming = true;
+            return;
+        }
 
-        // Mouse input
-        yaw += Input.GetAxis("Mouse X") * mouseSensitivity;
-        pitch -= Input.GetAxis("Mouse Y") * mouseSensitivity;
+        var gm = NetworkGameManager.Instance;
+        bool phaseKnown = gm != null && gm.IsReady && gm.Object != null && gm.Object.IsValid;
+        bool meeting = phaseKnown && (gm.CurrentPhase == NetworkGameManager.GamePhase.Discussion
+            || gm.CurrentPhase == NetworkGameManager.GamePhase.Voting);
+        bool freeRoam = !phaseKnown || NetworkGameManager.IsFreeRoamPhase(gm.CurrentPhase);
+        bool overUI = UnityEngine.EventSystems.EventSystem.current != null
+            && UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject();
+        Vector2 look = overUI || meeting ? Vector2.zero
+            : new Vector2(Input.GetAxis("Mouse X"), Input.GetAxis("Mouse Y"));
+        Vector2 move = new Vector2(Input.GetAxisRaw("Horizontal"), Input.GetAxisRaw("Vertical"));
+        UpdateFraming(Time.deltaTime, look, move, freeRoam, meeting, overUI);
+    }
+
+    // Input is supplied separately so the framing/collision behaviour can also
+    // be exercised deterministically without a network session or physical mouse.
+    private void UpdateFraming(float dt, Vector2 look, Vector2 move, bool freeRoam, bool meeting, bool overUI)
+    {
+        if (dt <= 0f || target == null) return;
+        Vector3 displacement = target.position - _lastTargetPosition;
+        bool reset = _resetFraming || _trackedTarget != target
+            || displacement.sqrMagnitude > teleportResetDistance * teleportResetDistance;
+        bool enteringMeeting = meeting && !_wasMeeting;
+        _wasMeeting = meeting;
+        float focusHeight = freeRoam || meeting ? shoulderHeight : height;
+        if (reset)
+        {
+            _trackedTarget = target;
+            _smoothedVelocity = Vector3.zero;
+            _speedBlend = 0f;
+            _focus = target.position + Vector3.up * focusHeight;
+            // On a new player/respawn start behind their facing direction.
+            yaw = target.eulerAngles.y;
+            _movementYaw = yaw;
+            _manualLookGrace = autoAlignDelay;
+            _shoulderBlend = freeRoam ? shoulderOffset : 0f;
+            _resetFraming = false;
+        }
+        if (enteringMeeting)
+        {
+            yaw = target.eulerAngles.y;
+            pitch = meetingPitch;
+            _smoothedVelocity = Vector3.zero;
+            _speedBlend = 0f;
+        }
+        _lastTargetPosition = target.position;
+
+        float framingBlend = 1f - Mathf.Exp(-Mathf.Max(.1f, framingResponse) * dt);
+        Vector3 velocity = reset || !freeRoam ? Vector3.zero : displacement / dt;
+        velocity.y = 0f;
+        velocity = Vector3.ClampMagnitude(velocity, Mathf.Max(.1f, fullSpeed) * 1.5f);
+        _smoothedVelocity = Vector3.Lerp(_smoothedVelocity, velocity, framingBlend);
+        float speed = Mathf.Clamp01(_smoothedVelocity.magnitude / Mathf.Max(.1f, fullSpeed));
+        _speedBlend = Mathf.Lerp(_speedBlend, speed, framingBlend);
+
+        bool manualLook = !meeting && !overUI && look.sqrMagnitude > 0.0001f;
+        _manualLookGrace = Mathf.Max(0f, _manualLookGrace - dt);
+        if (manualLook)
+        {
+            yaw += look.x * mouseSensitivity;
+            pitch -= look.y * mouseSensitivity;
+            _manualLookGrace = autoAlignDelay;
+        }
+        if (overUI) _manualLookGrace = autoAlignDelay;
+
+        // Hold a stable movement reference while automatic orbit is turning.
+        // A new direction or manual look restores camera-relative steering.
+        if (reset || manualLook || move.sqrMagnitude < 0.01f
+            || (move.normalized - _previousMoveInput.normalized).sqrMagnitude > 0.01f)
+            _movementYaw = yaw;
+        _previousMoveInput = move;
+
+        if (autoAlign && freeRoam && !overUI && !manualLook && _manualLookGrace <= 0f
+            && move.sqrMagnitude > 0.01f && _smoothedVelocity.magnitude >= autoAlignMinimumSpeed)
+        {
+            float desiredYaw = Mathf.Atan2(_smoothedVelocity.x, _smoothedVelocity.z) * Mathf.Rad2Deg;
+            float delta = Mathf.DeltaAngle(yaw, desiredYaw);
+            // Ease near the desired angle, with a hard maximum turn speed.
+            yaw += Mathf.Clamp(delta * (1f - Mathf.Exp(-2.5f * dt)), -autoAlignSpeed * dt, autoAlignSpeed * dt);
+            pitch = Mathf.MoveTowards(pitch, neutralPitch, 12f * dt);
+        }
 
         // Limit vertical rotation
         pitch = Mathf.Clamp(pitch, -20f, 60f);
 
         // Calculate camera rotation
-        Quaternion rotation = Quaternion.Euler(pitch, yaw, 0);
+        Quaternion rotation = Quaternion.Euler(Mathf.Clamp(pitch + (freeRoam ? runningPitchOffset * _speedBlend : 0f), -20f, 60f), yaw, 0);
 
         // Calculate camera position
-        Vector3 targetPosition = target.position + Vector3.up * height;
+        Vector3 lead = _smoothedVelocity / Mathf.Max(.1f, fullSpeed) * movementLookAhead;
+        lead = Vector3.ClampMagnitude(lead, movementLookAhead);
+        if (!freeRoam) lead = Vector3.zero;
+        Vector3 pivot = target.position + Vector3.up * focusHeight;
+        Vector3 targetPosition = pivot + lead;
+        _focus = reset ? targetPosition : Vector3.Lerp(_focus, targetPosition, framingBlend);
+        _shoulderBlend = Mathf.Lerp(_shoulderBlend, freeRoam ? shoulderOffset : 0f, framingBlend);
+        // Offset both camera and its aim point: aiming at the player's centre
+        // would cancel the shoulder composition and put them back in the centre.
+        Vector3 aim = _focus + rotation * Vector3.right * _shoulderBlend;
+        float desiredDistance = meeting ? meetingDistance : freeRoam
+            ? shoulderDistance + runningDistance * _speedBlend : distance;
+        Vector3 desiredPosition = aim - rotation * Vector3.forward * Mathf.Max(.5f, desiredDistance);
+        Vector3 candidate = reset ? desiredPosition : Vector3.Lerp(transform.position, desiredPosition,
+            1f - Mathf.Exp(-Mathf.Max(.1f, smoothSpeed) * dt));
+        // Collision is resolved AFTER smoothing; otherwise interpolation itself
+        // can put the camera through a corner. Pull in immediately, ease out.
+        Vector3 offset = candidate - pivot;
+        float wantedLength = offset.magnitude;
+        float safeLength = FindClearDistance(pivot, offset);
+        // Recover towards the unobstructed destination, not the already-smoothed
+        // candidate; using the latter would compound damping every frame.
+        float clearDestination = FindClearDistance(pivot, desiredPosition - pivot);
+        if (reset || clearDestination < _boomLength) _boomLength = clearDestination;
+        else _boomLength = Mathf.Lerp(_boomLength, clearDestination,
+            1f - Mathf.Exp(-collisionRecoverySpeed * dt));
+        transform.position = pivot + (wantedLength > .001f ? offset / wantedLength * Mathf.Min(_boomLength, safeLength) : Vector3.zero);
+        Vector3 view = aim - transform.position;
+        transform.rotation = view.sqrMagnitude > .001f ? Quaternion.LookRotation(view, Vector3.up) : rotation;
+        if (_camera != null)
+            _camera.fieldOfView = Mathf.Lerp(_camera.fieldOfView,
+                Mathf.Clamp(_baseFov + (freeRoam ? runningFovIncrease * _speedBlend : 0f), 20f, 100f), framingBlend);
+    }
 
-        Vector3 desiredPosition =
-            targetPosition - rotation * Vector3.forward * distance;
+    private float FindClearDistance(Vector3 origin, Vector3 offset)
+    {
+        float length = offset.magnitude;
+        if (length < .001f) return 0f;
+        // Fusion Multiple Peer mode gives each runner a separate physics scene.
+        PhysicsScene physics = target.gameObject.scene.GetPhysicsScene();
+        if (!physics.IsValid()) return length;
+        float radius = Mathf.Max(.05f, collisionRadius);
+        if (_camera != null)
+        {
+            float halfHeight = _camera.nearClipPlane * Mathf.Tan(_camera.fieldOfView * .5f * Mathf.Deg2Rad);
+            radius = Mathf.Max(radius, Mathf.Sqrt(halfHeight * halfHeight * (1f + _camera.aspect * _camera.aspect)
+                + _camera.nearClipPlane * _camera.nearClipPlane));
+        }
+        // Sphere casts do not reliably report a collider containing their origin.
+        // Fail closed in that case rather than allowing a view through the wall.
+        int overlaps;
+        do
+        {
+            overlaps = physics.OverlapSphere(origin, radius, _overlaps, obstructionLayers, QueryTriggerInteraction.Ignore);
+            if (overlaps < _overlaps.Length) break;
+            System.Array.Resize(ref _overlaps, _overlaps.Length * 2);
+        } while (true);
+        for (int i = 0; i < overlaps; i++) if (BlocksCamera(_overlaps[i])) return 0f;
 
-        // Smooth camera movement
-        transform.position = Vector3.Lerp(
-            transform.position,
-            desiredPosition,
-            smoothSpeed * Time.deltaTime
-        );
+        int count;
+        do
+        {
+            count = physics.SphereCast(origin, radius, offset / length, _wallHits, length, obstructionLayers, QueryTriggerInteraction.Ignore);
+            if (count < _wallHits.Length) break;
+            System.Array.Resize(ref _wallHits, _wallHits.Length * 2);
+        } while (true);
+        float nearest = length;
+        for (int i = 0; i < count; i++)
+            if (BlocksCamera(_wallHits[i].collider))
+                nearest = Mathf.Min(nearest, Mathf.Max(0f, _wallHits[i].distance - wallPadding));
+        return nearest;
+    }
 
-        // Look at player
-        transform.LookAt(targetPosition);
+    private bool BlocksCamera(Collider collider)
+    {
+        // Players must not push the camera around when passing behind its owner.
+        return collider != null && !collider.transform.IsChildOf(target)
+            && collider.GetComponentInParent<PlayerState>() == null;
     }
 
     // Returns true (and deactivates this camera) if it belongs to ConnectScene or
