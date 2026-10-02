@@ -196,7 +196,10 @@ public class CameraFollow : MonoBehaviour
         bool phaseKnown = gm != null && gm.IsReady && gm.Object != null && gm.Object.IsValid;
         bool meeting = phaseKnown && (gm.CurrentPhase == NetworkGameManager.GamePhase.Discussion
             || gm.CurrentPhase == NetworkGameManager.GamePhase.Voting);
-        bool freeRoam = !phaseKnown || NetworkGameManager.IsFreeRoamPhase(gm.CurrentPhase);
+        // Lobby walking uses the same close, movement-responsive camera as the
+        // match. Keep this camera-only: lobby must not enable gameplay abilities.
+        bool freeRoam = !phaseKnown || gm.CurrentPhase == NetworkGameManager.GamePhase.Lobby
+            || NetworkGameManager.IsFreeRoamPhase(gm.CurrentPhase);
         bool overUI = UnityEngine.EventSystems.EventSystem.current != null
             && UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject();
         Vector2 look = overUI || meeting ? Vector2.zero

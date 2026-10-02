@@ -48,6 +48,16 @@ public class CharacterSelectionUIManager : MonoBehaviour
         if (gm.CurrentPhase != NetworkGameManager.GamePhase.Lobby) return;
 
         ResolveLocalPlayer(gm);
+        // Close only after the host-confirmed selection reaches this client,
+        // not on click: a competing reservation may still reject the request.
+        // This is the selection tab only; the lobby's Start Game UI stays active.
+        if (_localPlayerState != null && _localPlayerState.HasSelectedCharacter)
+        {
+            _pendingCharacterId = -1;
+            gameObject.SetActive(false);
+            return;
+        }
+
         UpdatePendingRequest();
         RefreshSlots(gm);
         RefreshStatus(gm);
