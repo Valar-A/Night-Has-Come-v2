@@ -333,7 +333,7 @@ public class NetworkGameManager : NetworkBehaviour
     {
         if (!SchoolSpawns.IsReady)
         {
-            Debug.LogError("[NetworkGameManager] Day started but the school's SpawnPoints group could not be found — players are staying wherever they were. Re-run Tools/Blackwood/Generate School Blockout if the markers are missing.");
+            Debug.LogError("[NetworkGameManager] No active school spawn markers found. Add GameplaySpawnPoints with Spawn_0..Spawn_9 children on safe ground in GameplayScene (legacy BlackwoodSchool_Blockout/SpawnPoints is also supported).");
             return;
         }
 

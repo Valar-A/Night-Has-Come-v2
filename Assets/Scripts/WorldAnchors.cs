@@ -326,18 +326,20 @@ public static class SchoolSpawns
 
     private static bool Resolve()
     {
-        if (_points != null && _points.Length > 0) return true;
+        if (_points != null && _points.Length > 0 &&
+            System.Array.TrueForAll(_points, p => p != null && p.gameObject.activeInHierarchy)) return true;
 
-        GameObject root = GameObject.Find(RootName);
-        if (root == null) return false;
-
-        Transform group = root.transform.Find("SpawnPoints");
+        // Explicit map-independent markers take precedence over the legacy blockout.
+        GameObject spawnRoot = GameObject.Find("GameplaySpawnPoints");
+        GameObject root = spawnRoot == null ? GameObject.Find(RootName) : null;
+        Transform group = spawnRoot != null ? spawnRoot.transform :
+            (root != null ? root.transform.Find("SpawnPoints") : null);
         if (group == null) return false;
 
         var list = new System.Collections.Generic.List<Transform>();
         foreach (Transform child in group)
         {
-            if (child.name.StartsWith("Spawn_")) list.Add(child);
+            if (child.gameObject.activeInHierarchy && child.name.StartsWith("Spawn_")) list.Add(child);
         }
 
         list.Sort((a, b) =>
