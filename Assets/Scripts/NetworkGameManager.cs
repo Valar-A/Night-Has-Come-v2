@@ -24,7 +24,7 @@ using UnityEngine;
 //
 // This is the single source of truth for what phase the game is in. Only the server
 // (state authority) ever changes CurrentPhase — clients just read it.
-public class NetworkGameManager : NetworkBehaviour
+public partial class NetworkGameManager : NetworkBehaviour
 {
     public enum GamePhase
     {
