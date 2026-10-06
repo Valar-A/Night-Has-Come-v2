@@ -16,7 +16,7 @@ public struct TaskWork : INetworkStruct
 public partial class TaskManager
 {
     public const float WorkSeconds = 5f;
-    [Header("Civilian crafting balance")]
+    [Header("Town crafting balance")]
     [SerializeField, Min(1)] private int metalCost = 3;
     [SerializeField, Min(1)] private int wireCost = 3;
     [SerializeField, Min(1)] private int chemicalCost = 3;
@@ -93,12 +93,17 @@ public partial class TaskManager
         }
     }
 
-    private bool IsCivilian(PlayerRef player) => PlayerRoleManager.Instance != null
-        && PlayerRoleManager.Instance.GetServerRole(player) == PlayerRole.Civilian;
+    private bool CanEarnResources(PlayerRef player)
+    {
+        var roles = GetComponent<PlayerRoleManager>();
+        if (roles == null || roles.Object == null || !roles.Object.IsValid) return false;
+        var role = roles.GetServerRole(player);
+        return role == PlayerRole.Civilian || role == PlayerRole.Doctor || role == PlayerRole.Sheriff;
+    }
 
     private void RewardResources(PlayerRef player)
     {
-        if (!IsCivilian(player) || ResourcesSettled) return;
+        if (!CanEarnResources(player) || ResourcesSettled) return;
         Inventories.TryGet(player, out var inventory);
         int reward = Mathf.Max(1, resourceReward);
         inventory.Metal += reward;
@@ -115,7 +120,7 @@ public partial class TaskManager
     {
         var gm = NetworkGameManager.Instance;
         if (ShieldClaimed || ResourcesSettled || gm == null || !gm.IsReady
-            || !NetworkGameManager.IsFreeRoamPhase(gm.CurrentPhase) || !IsCivilian(info.Source)) return;
+            || !NetworkGameManager.IsFreeRoamPhase(gm.CurrentPhase) || !CanEarnResources(info.Source)) return;
         var obj = Runner.GetPlayerObject(info.Source);
         if (obj == null || !obj.TryGetComponent(out PlayerState state) || !state.IsAlive
             || !CraftingStation.IsNear(obj.transform) || !Inventories.TryGet(info.Source, out var inventory)
