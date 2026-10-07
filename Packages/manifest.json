@@ -10,8 +10,11 @@
     "com.unity.inputsystem": "1.19.0",
     "com.unity.multiplayer.center": "1.0.1",
     "com.unity.nuget.mono-cecil": "1.10.2",
+    "com.unity.pipeline": "0.8.0-exp.1",
     "com.unity.render-pipelines.high-definition": "17.3.0",
     "com.unity.render-pipelines.universal": "17.3.0",
+    "com.unity.services.authentication": "3.8.0",
+    "com.unity.services.vivox": "16.12.1",
     "com.unity.test-framework": "1.6.0",
     "com.unity.timeline": "1.8.12",
     "com.unity.ugui": "2.0.0",
@@ -50,7 +53,6 @@
     "com.unity.modules.video": "1.0.0",
     "com.unity.modules.vr": "1.0.0",
     "com.unity.modules.wind": "1.0.0",
-    "com.unity.modules.xr": "1.0.0",
-    "com.unity.pipeline": "0.8.0-exp.1"
+    "com.unity.modules.xr": "1.0.0"
   }
 }
