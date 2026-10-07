@@ -302,6 +302,18 @@ public static class SchoolSpawns
         _points = null;
     }
 
+    public static bool TryGetMeetingReturnPose(NetworkRunner runner, int index, out Vector3 position, out Quaternion rotation)
+    {
+        position = Vector3.zero;
+        rotation = Quaternion.identity;
+        var group = GameObject.Find("MeetingReturnPoints");
+        var point = group != null ? group.transform.Find("Spawn_" + index) : null;
+        if (point == null || !point.gameObject.activeInHierarchy) return false;
+        position = WorldAnchorUtil.SnapToGround(runner, point.position);
+        rotation = point.rotation;
+        return true;
+    }
+
     // Returns the marker's X/Z with the height resolved against the actual floor —
     // see WorldAnchorUtil.SnapToGround for why the marker's own Y is not usable.
     public static bool TryGetSpawnPose(NetworkRunner runner, int index, out Vector3 position, out Quaternion rotation)

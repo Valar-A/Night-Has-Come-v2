@@ -10,6 +10,8 @@ public sealed class DiscussionChatUI : MonoBehaviour
     public TMP_Text status;
     public UnityEngine.UI.Button sendButton;
     public UnityEngine.UI.ScrollRect scroll;
+    public UnityEngine.UI.Button continueButton;
+    public TMP_Text continueLabel;
     private NetworkGameManager _manager;
     private int _revision = -1;
     private float _nextSend;
@@ -21,12 +23,14 @@ public sealed class DiscussionChatUI : MonoBehaviour
         messages.richText = false;
         input.onSubmit.AddListener(Submit);
         sendButton.onClick.AddListener(Send);
+        if (continueButton != null) continueButton.onClick.AddListener(ContinueToVoting);
     }
 
     private void OnDestroy()
     {
         input.onSubmit.RemoveListener(Submit);
         sendButton.onClick.RemoveListener(Send);
+        if (continueButton != null) continueButton.onClick.RemoveListener(ContinueToVoting);
     }
 
     private void Update()
@@ -42,6 +46,15 @@ public sealed class DiscussionChatUI : MonoBehaviour
         if (_manager != gm) { _manager = gm; _revision = -1; }
         var local = gm.Runner.GetPlayerObject(gm.Runner.LocalPlayer);
         bool alive = local != null && local.TryGetComponent(out PlayerState state) && state.IsAlive;
+        if (continueButton != null)
+        {
+            bool discussion = gm.CurrentPhase == NetworkGameManager.GamePhase.Discussion;
+            continueButton.gameObject.SetActive(discussion);
+            bool requested = gm.HasRequestedVoting(gm.Runner.LocalPlayer);
+            continueButton.interactable = discussion && alive && !requested;
+            continueLabel.text = (requested ? "WAITING FOR PLAYERS" : "CONTINUE TO VOTING") +
+                " (" + gm.DiscussionReadyCount + "/" + gm.DiscussionLivingCount + ")";
+        }
         input.interactable = alive;
         sendButton.interactable = alive && Time.unscaledTime >= _nextSend &&
             NetworkGameManager.CleanChat(input.text).Length > 0;
@@ -56,6 +69,11 @@ public sealed class DiscussionChatUI : MonoBehaviour
     }
 
     private void Submit(string value) => Send();
+    private void ContinueToVoting()
+    {
+        var gm = NetworkGameManager.Instance;
+        if (gm != null && gm.ChatOpen && continueButton.interactable) gm.RPC_ContinueToVoting();
+    }
     public void Send()
     {
         var gm = NetworkGameManager.Instance;

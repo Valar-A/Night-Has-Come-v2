@@ -152,8 +152,12 @@ public partial class NetworkGameManager : NetworkBehaviour
         {
             GamePhase previousServerPhase = _lastServerPhase;
             _lastServerPhase = CurrentPhase;
+            if (CurrentPhase == GamePhase.Discussion) DiscussionReady.Clear();
             OnServerPhaseEntered(previousServerPhase, CurrentPhase);
         }
+
+        if (CurrentPhase == GamePhase.Discussion && EveryoneReadyForVoting())
+            ForceAdvancePhase();
 
         // Lobby and GameOver don't auto-advance on a timer — they're triggered manually
         // (Lobby -> RoleAssign when enough players ready; GameOver ends the loop).
@@ -240,6 +244,9 @@ public partial class NetworkGameManager : NetworkBehaviour
                 if (victimObject != null && victimObject.TryGetComponent(out PlayerState state))
                 {
                     state.Kill(false);
+                    // Re-evaluate parity only when this vote actually changes survivors.
+                    // An empty/skip/tied ballot must resume play, including a 1v1 test match.
+                    CheckWinCondition();
                 }
                 Debug.Log($"[NetworkGameManager] Vote result: {eliminated.Value} was voted out.");
             }
@@ -251,7 +258,6 @@ public partial class NetworkGameManager : NetworkBehaviour
             // Same reasoning as the Night-kill check above — the Town can just as
             // easily vote out the last Mafia (Civilians win) as accidentally vote
             // out their last Doctor/Civilian and hand it to the Mafia.
-            CheckWinCondition();
         }
 
         // CheckWinCondition() above may have just switched CurrentPhase to GameOver —
@@ -349,7 +355,10 @@ public partial class NetworkGameManager : NetworkBehaviour
         {
             Vector3 position;
             Quaternion rotation;
-            if (!SchoolSpawns.TryGetSpawnPose(Runner, i, out position, out rotation)) continue;
+            position = Vector3.zero;
+            rotation = Quaternion.identity;
+            bool found = !matchJustStarted && SchoolSpawns.TryGetMeetingReturnPose(Runner, i, out position, out rotation);
+            if (!found && !SchoolSpawns.TryGetSpawnPose(Runner, i, out position, out rotation)) continue;
             if (TeleportPlayer(players[i], position, rotation)) moved++;
         }
 

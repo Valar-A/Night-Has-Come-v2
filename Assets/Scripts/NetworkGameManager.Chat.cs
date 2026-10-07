@@ -22,7 +22,7 @@ public partial class NetworkGameManager
         return result.ToString().Trim();
     }
 
-    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority, HostMode = RpcHostMode.SourceIsHostPlayer)]
     public void RPC_SendDiscussionChat(string message, RpcInfo info = default)
     {
         if (!ChatOpen) return;
