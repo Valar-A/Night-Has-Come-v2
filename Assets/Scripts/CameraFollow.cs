@@ -10,6 +10,17 @@ public class CameraFollow : MonoBehaviour
 
     public Transform target;
 
+    [Header("First-person view")]
+    public bool firstPerson = true;
+    [Min(0.1f)] public float eyeHeight = 1.65f;
+    [Range(40f, 100f)] public float firstPersonFov = 75f;
+    private readonly System.Collections.Generic.Dictionary<Renderer, UnityEngine.Rendering.ShadowCastingMode> _ownerRenderers
+        = new System.Collections.Generic.Dictionary<Renderer, UnityEngine.Rendering.ShadowCastingMode>();
+    private readonly System.Collections.Generic.List<Renderer> _rendererBuffer = new System.Collections.Generic.List<Renderer>();
+    private Transform _hiddenOwner;
+    private bool _ownsCursor;
+    private bool _wasFirstPersonLook;
+
     public float distance = 5f;
     public float height = 2.5f;
 
@@ -166,6 +177,8 @@ public class CameraFollow : MonoBehaviour
         // let SpectatorController own the camera for the rest of the match.
         if (SpectatorController.Instance != null && SpectatorController.Instance.IsSpectating)
         {
+            RestoreOwnerVisibility();
+            ReleaseCursor();
             _resetFraming = true;
             if (_camera != null) _camera.fieldOfView = _baseFov;
             return;
@@ -188,6 +201,8 @@ public class CameraFollow : MonoBehaviour
         TryAcquireTarget();
         if (target == null)
         {
+            RestoreOwnerVisibility();
+            ReleaseCursor();
             _resetFraming = true;
             return;
         }
@@ -202,10 +217,100 @@ public class CameraFollow : MonoBehaviour
             || NetworkGameManager.IsFreeRoamPhase(gm.CurrentPhase);
         bool overUI = UnityEngine.EventSystems.EventSystem.current != null
             && UnityEngine.EventSystems.EventSystem.current.IsPointerOverGameObject();
+        if (firstPerson)
+        {
+            bool selectionComplete = target.TryGetComponent(out PlayerState owner) && owner.HasSelectedCharacter;
+            UpdateFirstPerson(Time.deltaTime, freeRoam && selectionComplete, meeting, overUI);
+            return;
+        }
+        RestoreOwnerVisibility();
+        ReleaseCursor();
         Vector2 look = overUI || meeting ? Vector2.zero
             : new Vector2(Input.GetAxis("Mouse X"), Input.GetAxis("Mouse Y"));
         Vector2 move = new Vector2(Input.GetAxisRaw("Horizontal"), Input.GetAxisRaw("Vertical"));
         UpdateFraming(Time.deltaTime, look, move, freeRoam, meeting, overUI);
+    }
+
+    private void UpdateFirstPerson(float dt, bool freeRoam, bool meeting, bool overUI)
+    {
+        bool leavingMeeting = _wasMeeting && !meeting;
+        bool startingLook = freeRoam && !meeting && !_wasFirstPersonLook;
+        _wasFirstPersonLook = freeRoam && !meeting;
+        bool reset = _resetFraming || _trackedTarget != target
+            || (target.position - _lastTargetPosition).sqrMagnitude > teleportResetDistance * teleportResetDistance;
+        if (reset || (meeting && !_wasMeeting))
+        {
+            yaw = target.eulerAngles.y;
+            pitch = 0f;
+            _trackedTarget = target;
+            _resetFraming = false;
+        }
+        _wasMeeting = meeting;
+        _lastTargetPosition = target.position;
+        if (!freeRoam || meeting) ReleaseCursor();
+        else if (Input.GetKeyDown(KeyCode.Escape)) ReleaseCursor();
+        else if (!_ownsCursor && !overUI && Input.GetMouseButtonDown(0))
+        {
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
+            _ownsCursor = true;
+        }
+        // Lock on initial acquisition; Escape releases it until the player clicks the world.
+        if ((reset || leavingMeeting || startingLook) && freeRoam && !meeting)
+        {
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
+            _ownsCursor = true;
+        }
+        if (freeRoam && !meeting && _ownsCursor && Cursor.lockState == CursorLockMode.Locked)
+        {
+            yaw += Input.GetAxis("Mouse X") * mouseSensitivity;
+            pitch = Mathf.Clamp(pitch - Input.GetAxis("Mouse Y") * mouseSensitivity, -85f, 85f);
+        }
+        _movementYaw = yaw;
+        // No orbit boom, shoulder offset, auto-turn or sprint pull-back in first person.
+        transform.SetPositionAndRotation(target.position + Vector3.up * eyeHeight, Quaternion.Euler(pitch, yaw, 0f));
+        if (_camera != null)
+        {
+            _camera.nearClipPlane = .03f;
+            _camera.fieldOfView = firstPersonFov;
+        }
+        if (_hiddenOwner != target)
+        {
+            RestoreOwnerVisibility();
+            _hiddenOwner = target;
+        }
+        target.GetComponentsInChildren(true, _rendererBuffer);
+        foreach (var renderer in _rendererBuffer)
+        {
+            if (!_ownerRenderers.ContainsKey(renderer)) _ownerRenderers.Add(renderer, renderer.shadowCastingMode);
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly;
+        }
+    }
+
+    private void RestoreOwnerVisibility()
+    {
+        foreach (var entry in _ownerRenderers)
+            if (entry.Key != null) entry.Key.shadowCastingMode = entry.Value;
+        _ownerRenderers.Clear();
+        _hiddenOwner = null;
+    }
+
+    private void ReleaseCursor()
+    {
+        if (!_ownsCursor) return;
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+        _ownsCursor = false;
+    }
+
+    private void OnDisable()
+    {
+        RestoreOwnerVisibility();
+        ReleaseCursor();
+        _resetFraming = true;
+        _wasFirstPersonLook = false;
+        if (Instance == this) Instance = null;
     }
 
     // Input is supplied separately so the framing/collision behaviour can also

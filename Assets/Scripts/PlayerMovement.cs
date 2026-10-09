@@ -18,6 +18,8 @@ public class PlayerMovement : NetworkBehaviour
     public float walkSpeed = 3f;
     public float runSpeed = 6f;
     public float rotationSpeed = 10f;
+    [Tooltip("Face camera yaw while strafing/backing up, rather than turning toward travel.")]
+    public bool firstPersonMovement = true;
 
     [Header("Movement Smoothing (PUBG Mobile-style accelerate/decelerate)")]
     [Tooltip("How fast speed ramps UP toward the target (walk/run). Higher = snappier start.")]
@@ -55,6 +57,10 @@ public class PlayerMovement : NetworkBehaviour
     // watched once per rendered frame in Render() — see the field's use below.
     [Networked] int jumpEventTicks { get; set; }
     int lastSeenJumpEventTicks;
+    [Networked] int turnEventTicks { get; set; }
+    [Networked] int turnDirection { get; set; }
+    [Networked] int previousTurnInput { get; set; }
+    int lastSeenTurnEventTicks;
 
     void Awake()
     {
@@ -77,6 +83,9 @@ public class PlayerMovement : NetworkBehaviour
         lastMoveDirection = Vector3.zero;
         jumpEventTicks = 0;
         lastSeenJumpEventTicks = 0;
+        turnEventTicks = 0;
+        turnDirection = previousTurnInput = 0;
+        lastSeenTurnEventTicks = 0;
     }
 
     public override void Spawned()
@@ -182,6 +191,7 @@ public class PlayerMovement : NetworkBehaviour
         // the spot.
         currentSpeed01 = 0f;
         lastMoveDirection = Vector3.zero;
+        previousTurnInput = 0;
     }
 
     public override void FixedUpdateNetwork()
@@ -232,6 +242,7 @@ public class PlayerMovement : NetworkBehaviour
                 || gm.CurrentPhase == NetworkGameManager.GamePhase.Voting))
         {
             currentSpeed01 = 0f;   // so the Animator blends back to idle instead of holding a run pose
+            previousTurnInput = 0;
             kcc.Move(Vector3.zero, 0f);
             return;
         }
@@ -242,6 +253,13 @@ public class PlayerMovement : NetworkBehaviour
         float h = input.horizontal;
         float v = input.vertical;
         bool running = input.running;
+        int side = h < -.1f ? -1 : h > .1f ? 1 : 0;
+        if (firstPersonMovement && isGrounded && !input.jumpPressed && side != 0 && side != previousTurnInput)
+        {
+            turnDirection = side;
+            turnEventTicks++;
+        }
+        previousTurnInput = side;
 
         // IMPORTANT: this must come from input.cameraYaw (captured on the owning
         // player's own machine in NetworkBootstrap.OnInput), NOT from a local
@@ -296,10 +314,15 @@ public class PlayerMovement : NetworkBehaviour
             // (and A/D strafing) walked/ran backward-or-sideways while still playing the
             // forward animation facing the original direction. Feed the smoothed rotation
             // through kcc.SetLookRotation() instead so it sticks.
-            Quaternion targetRot = Quaternion.LookRotation(lastMoveDirection);
-            Quaternion smoothedRot = Quaternion.Slerp(kcc.TransformRotation, targetRot, rotationSpeed * dt);
-            kcc.SetLookRotation(smoothedRot);
+            if (!firstPersonMovement)
+            {
+                Quaternion targetRot = Quaternion.LookRotation(lastMoveDirection);
+                Quaternion smoothedRot = Quaternion.Slerp(kcc.TransformRotation, targetRot, rotationSpeed * dt);
+                kcc.SetLookRotation(smoothedRot);
+            }
         }
+
+        if (firstPersonMovement) kcc.SetLookRotation(camYawRot);
 
         // =========================
         // JUMP
@@ -329,6 +352,13 @@ public class PlayerMovement : NetworkBehaviour
 
         animator.SetFloat("Speed", currentSpeed01);
         animator.SetBool("Grounded", kcc.IsGrounded);
+        if (turnEventTicks != lastSeenTurnEventTicks)
+        {
+            lastSeenTurnEventTicks = turnEventTicks;
+            animator.ResetTrigger("TurnLeft");
+            animator.ResetTrigger("TurnRight");
+            animator.SetTrigger(turnDirection < 0 ? "TurnLeft" : "TurnRight");
+        }
 
         if (jumpEventTicks != lastSeenJumpEventTicks)
         {
